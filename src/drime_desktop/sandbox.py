@@ -17,9 +17,9 @@ from pathlib import Path
 
 from . import APP_ID, backend
 
-CONFIG_FILE = backend.CONFIG_DIR / "daemon.json"   # {"mount": bool, "sync": bool}
+CONFIG_FILE = backend.CONFIG_DIR / "daemon.json"   # {"mount": bool, "sync": bool, "metadata_sync": bool}
 LOG_FILE = backend.CACHE_DIR / "daemon.log"         # service, mount and sync output
-DEFAULT_CONFIG = {"mount": False, "sync": False}
+DEFAULT_CONFIG = {"mount": False, "sync": False, "metadata_sync": False}
 
 
 def _run_dir() -> Path:

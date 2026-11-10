@@ -123,10 +123,6 @@ def get_api_token() -> str | None:
 
 def metadata_sync_problem() -> str | None:
     """Check if metadata sync can be enabled. Returns problem string or None."""
-    if backend.is_flatpak():
-        # For Flatpak, exiftool would need to be bundled or called on host
-        # For now, only support on native installs
-        return "Metadata sync is not yet available in the Flatpak version"
     if not exiftool_available():
         return f"exiftool is not installed ({backend.install_hint('perl-Image-ExifTool')})"
     if not get_api_token():
@@ -395,6 +391,10 @@ def metadata_sync_log_tail(lines: int = 60) -> str:
     """Get recent log output from metadata sync."""
     if backend.is_flatpak():
         from . import sandbox
-        return sandbox.log_tail(lines)  # Would need filtering for metadata entries
+        # Filter the shared daemon log for metadata sync entries
+        full = sandbox.log_tail(lines * 4)
+        filtered = [l for l in full.splitlines()
+                    if "[metadata]" in l or "metadata sync" in l.lower()]
+        return "\n".join(filtered[-lines:])
     return backend.run(["journalctl", "--user", "-u", METADATA_SERVICE, "-n", str(lines),
                         "--no-pager", "-o", "short-iso"]).stdout
