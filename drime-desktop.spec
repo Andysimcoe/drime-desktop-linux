@@ -82,8 +82,8 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/*.xml
   folder are both searched for local copies to extract EXIF from
 - Settings toggle: enable/disable Photo metadata sync from the Settings dialog
   alongside the drive and sync folder toggles, with its own log expander and
-  Sync now button. Requires perl-Image-ExifTool (Recommends); Flatpak users
-  need perl-Image-ExifTool installed on the host system
+  Sync now button. The feature requires perl-Image-ExifTool when enabled
+  (added to Recommends; Flatpak users need it installed on the host system)
 - Updated for Fedora 45
 
 * Sun Sep 13 2026 DaveTheGameDev - 0.5.0-1
