@@ -314,7 +314,8 @@ def is_enabled(unit: str) -> bool:
     if is_flatpak():
         from . import sandbox
         cfg = sandbox.read_config()
-        return {MOUNT_UNIT: cfg["mount"], SYNC_TIMER: cfg["sync"]}.get(unit, False)
+        return {MOUNT_UNIT: cfg["mount"], SYNC_TIMER: cfg["sync"],
+                METADATA_TIMER: cfg.get("metadata_sync", False)}.get(unit, False)
     return systemctl("is-enabled", unit).returncode == 0
 
 
@@ -643,17 +644,26 @@ def sync_log_tail(lines: int = 60) -> str:
 
 def metadata_sync_problem() -> str | None:
     """Check if metadata sync can be enabled. Returns problem string or None."""
-    if is_flatpak():
-        return "Metadata sync is not yet available in the Flatpak version"
-    if not shutil.which("exiftool"):
-        return f"exiftool is not installed ({install_hint('perl-Image-ExifTool')})"
+    from .exif import exiftool_available
+    if not exiftool_available():
+        hint = install_hint("perl-Image-ExifTool")
+        if is_flatpak():
+            return f"exiftool is not installed on the host system ({hint})"
+        return f"exiftool is not installed ({hint})"
     return None
 
 
 def metadata_sync_enable(log: LogCb = _noop) -> None:
     """Enable the metadata sync timer."""
     if is_flatpak():
-        raise RuntimeError("Metadata sync is not yet available in the Flatpak version")
+        from . import sandbox
+        problem = metadata_sync_problem()
+        if problem:
+            raise RuntimeError(problem)
+        sandbox.write_config(metadata_sync=True)
+        sandbox.ensure_daemon()
+        log("Metadata sync enabled (runs every 2 minutes)")
+        return
     problem = metadata_sync_problem()
     if problem:
         raise RuntimeError(problem)
@@ -667,6 +677,9 @@ def metadata_sync_enable(log: LogCb = _noop) -> None:
 def metadata_sync_disable(log: LogCb = _noop) -> None:
     """Disable the metadata sync timer."""
     if is_flatpak():
+        from . import sandbox
+        sandbox.write_config(metadata_sync=False)
+        log("Metadata sync disabled")
         return
     systemctl("disable", "--now", METADATA_TIMER)
     log("Metadata sync disabled")
@@ -675,6 +688,9 @@ def metadata_sync_disable(log: LogCb = _noop) -> None:
 def metadata_sync_now() -> None:
     """Trigger an immediate metadata sync run."""
     if is_flatpak():
+        from . import sandbox
+        sandbox.trigger("metadata-sync-now")
+        sandbox.ensure_daemon()
         return
     systemctl("start", "--no-block", METADATA_SERVICE)
 
@@ -691,12 +707,15 @@ class MetadataSyncStatus:
 def metadata_sync_status() -> MetadataSyncStatus:
     """Get the current status of the metadata sync service."""
     if is_flatpak():
+        from . import sandbox
+        s = sandbox.read_status().get("metadata", {})
+        alive = sandbox.daemon_alive()
         return MetadataSyncStatus(
-            running=False,
-            last_result="",
-            last_start=None,
-            last_end=None,
-            next_run=None,
+            running=alive and bool(s.get("running")),
+            last_result=s.get("last_result") or "",
+            last_start=s.get("last_start"),
+            last_end=s.get("last_end"),
+            next_run=s.get("next_run") if alive else None,
         )
     out = systemctl("show", METADATA_SERVICE, "--timestamp=unix", "-p",
                     "ActiveState,Result,ExecMainStartTimestamp,ExecMainExitTimestamp").stdout
@@ -721,7 +740,11 @@ def metadata_sync_status() -> MetadataSyncStatus:
 def metadata_sync_log_tail(lines: int = 60) -> str:
     """Get recent log output from metadata sync."""
     if is_flatpak():
-        return ""
+        from . import sandbox
+        full = sandbox.log_tail(lines * 4)
+        filtered = [l for l in full.splitlines()
+                    if "[metadata]" in l or "metadata sync" in l.lower()]
+        return "\n".join(filtered[-lines:])
     return run(["journalctl", "--user", "-u", METADATA_SERVICE, "-n", str(lines),
                 "--no-pager", "-o", "short-iso"]).stdout
 

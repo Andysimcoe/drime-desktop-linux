@@ -33,6 +33,8 @@ UNMOUNT = ["fusermount3", "-uz", str(backend.MOUNT)]
 FIRST_RUN_DELAY = 120      # drime-bisync.timer OnBootSec=2min
 SYNC_INTERVAL = 900        # OnUnitActiveSec=15min
 SYNC_JITTER = 60           # RandomizedDelaySec=1min
+METADATA_FIRST_RUN_DELAY = 120   # same as bisync
+METADATA_INTERVAL = 120          # drime-metadata-sync.timer OnUnitActiveSec=2min
 OFFLINE_RETRY = 60
 BACKOFF = (10, 20, 40, 80, 160, 300)   # rclone-drime-mount.service RestartSec=10, growing
 HEALTHY_AFTER = 60         # seconds of uptime after which the backoff resets
@@ -104,6 +106,15 @@ class Daemon:
         self.sync_last_end: int | None = None
         self.sync_last_result = ""
         self.sync_next: float | None = self.started + FIRST_RUN_DELAY if self.cfg["sync"] else None
+        # metadata sync
+        self.meta_thread: threading.Thread | None = None
+        self.meta_results: queue.Queue = queue.Queue()
+        self.meta_last_start: int | None = None
+        self.meta_last_end: int | None = None
+        self.meta_last_result = ""
+        self.meta_next: float | None = (
+            self.started + METADATA_FIRST_RUN_DELAY if self.cfg.get("metadata_sync") else None
+        )
         self._status_at = 0.0
         self._dirty = True
 
@@ -125,9 +136,17 @@ class Daemon:
             else:
                 self.log("[sync] sync-now requested")
                 self.run_sync(now)
+        if sandbox.consume("metadata-sync-now"):
+            if self.meta_running:
+                self.log("[metadata] already running, metadata-sync-now ignored")
+            else:
+                self.log("[metadata] sync-now requested")
+                self.run_metadata_sync(now)
         self._drain_sync_results(now)
+        self._drain_metadata_results(now)
         self._supervise_mount(now)
         self._schedule_sync(now)
+        self._schedule_metadata_sync(now)
         if self._dirty or now - self._status_at >= STATUS_EVERY:
             self.write_status(now)
         if self.idle:
@@ -141,9 +160,15 @@ class Daemon:
         return self.sync_thread is not None and self.sync_thread.is_alive()
 
     @property
+    def meta_running(self) -> bool:
+        return self.meta_thread is not None and self.meta_thread.is_alive()
+
+    @property
     def idle(self) -> bool:
-        return (not self.cfg["mount"] and not self.cfg["sync"] and not self.sync_running
-                and self.mount_proc is None and not sandbox.pending("sync-now"))
+        return (not self.cfg["mount"] and not self.cfg["sync"] and not self.cfg.get("metadata_sync")
+                and not self.sync_running and not self.meta_running
+                and self.mount_proc is None
+                and not sandbox.pending("sync-now") and not sandbox.pending("metadata-sync-now"))
 
     def _config_mtime(self) -> float | None:
         try:
@@ -159,11 +184,15 @@ class Daemon:
         new = sandbox.read_config()
         if new == self.cfg:
             return
-        self.log(f"config: mount={'on' if new['mount'] else 'off'} sync={'on' if new['sync'] else 'off'}")
+        self.log(f"config: mount={'on' if new['mount'] else 'off'} sync={'on' if new['sync'] else 'off'} metadata={'on' if new.get('metadata_sync') else 'off'}")
         if new["sync"] and not self.cfg["sync"]:
             self.sync_next = now + FIRST_RUN_DELAY
         if not new["sync"]:
             self.sync_next = None
+        if new.get("metadata_sync") and not self.cfg.get("metadata_sync"):
+            self.meta_next = now + METADATA_FIRST_RUN_DELAY
+        if not new.get("metadata_sync"):
+            self.meta_next = None
         if new["mount"] and not self.cfg["mount"]:
             self.mount_failures, self.mount_restart_at = 0, None
         self.cfg = new
@@ -321,6 +350,57 @@ class Daemon:
         if isinstance(self.log, Log):
             self.log.rotate()
 
+    # --- metadata sync -------------------------------------------------------
+
+    def _schedule_metadata_sync(self, now: float) -> None:
+        if not self.cfg.get("metadata_sync"):
+            self.meta_next = None
+            return
+        if self.meta_next is None:
+            self.meta_next = now + METADATA_FIRST_RUN_DELAY
+        if now >= self.meta_next and not self.meta_running:
+            if not self.online():
+                self.meta_next = now + OFFLINE_RETRY
+                return
+            self.run_metadata_sync(now)
+
+    def run_metadata_sync(self, now: float) -> None:
+        from .metadata import run_metadata_sync as _do_sync
+        self.meta_last_start = int(now)
+        self.meta_next = None
+        self._dirty = True
+        self.log("[metadata] starting sync")
+
+        def worker():
+            try:
+                result = _do_sync(log=lambda msg: self.log(f"[metadata] {msg}"))
+                self.meta_results.put(result)
+            except Exception as e:
+                self.log(f"[metadata] unexpected error: {e}")
+                self.meta_results.put(None)
+
+        self.meta_thread = threading.Thread(target=worker, daemon=True)
+        self.meta_thread.start()
+
+    def _drain_metadata_results(self, now: float) -> None:
+        while True:
+            try:
+                result = self.meta_results.get_nowait()
+            except queue.Empty:
+                return
+            self.meta_last_end = int(now)
+            if result is None:
+                self.meta_last_result = "error"
+            else:
+                self.meta_last_result = (
+                    f"{result.updated} updated, {result.failed} failed"
+                )
+            self.log(f"[metadata] finished: {self.meta_last_result}")
+            if self.cfg.get("metadata_sync"):
+                self.meta_next = now + METADATA_INTERVAL
+            self.log_rotate()
+            self._dirty = True
+
     # --- output ---------------------------------------------------------------
 
     def _pump(self, proc: subprocess.Popen, prefix: str) -> None:
@@ -356,6 +436,14 @@ class Daemon:
                 "last_result": self.sync_last_result,
                 "next_run": int(self.sync_next) if self.sync_next else None,
             },
+            "metadata": {
+                "enabled": bool(self.cfg.get("metadata_sync")),
+                "running": self.meta_running,
+                "last_start": self.meta_last_start,
+                "last_end": self.meta_last_end,
+                "last_result": self.meta_last_result,
+                "next_run": int(self.meta_next) if self.meta_next else None,
+            },
         }
 
     def write_status(self, now: float) -> None:
@@ -380,7 +468,13 @@ class Daemon:
                 except OSError:
                     pass
                 self.sync_thread.join(5)
+        if self.meta_running:
+            self.log("[metadata] waiting for the running sync")
+            self.meta_thread.join(SYNC_STOP_GRACE)
+            if self.meta_running:
+                self.log("[metadata] still running, abandoning (will catch up on next run)")
         self._drain_sync_results(self.clock())
+        self._drain_metadata_results(self.clock())
         self.finished = True
         self.write_status(self.clock())
         self.log("stopped")

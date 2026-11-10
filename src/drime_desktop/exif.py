@@ -72,8 +72,32 @@ class ExifData:
         )
 
 
+def _exiftool_cmd() -> list[str]:
+    """Return the command to invoke exiftool.
+
+    In a Flatpak sandbox we can't call host binaries directly, so we route
+    through ``flatpak-spawn --host`` — the same mechanism already used for
+    fusermount3.  On a normal install we just call exiftool directly.
+    """
+    from . import backend
+    if backend.is_flatpak():
+        return ["flatpak-spawn", "--host", "exiftool"]
+    return ["exiftool"]
+
+
 def exiftool_available() -> bool:
-    """Check if exiftool is installed."""
+    """Check if exiftool is accessible (host or local)."""
+    from . import backend
+    if backend.is_flatpak():
+        # Try calling it via flatpak-spawn --host; a non-zero rc or OSError means absent.
+        try:
+            r = subprocess.run(
+                ["flatpak-spawn", "--host", "exiftool", "-ver"],
+                capture_output=True, timeout=10,
+            )
+            return r.returncode == 0
+        except OSError:
+            return False
     return shutil.which("exiftool") is not None
 
 
@@ -82,6 +106,8 @@ def extract_exif(path: Path) -> ExifData | None:
     Extract EXIF metadata from a file using exiftool.
 
     Returns None if extraction fails or no relevant data found.
+    Works on both native installs and the Flatpak (calls the host's exiftool
+    via flatpak-spawn --host).
     """
     if not path.exists():
         return None
@@ -91,7 +117,7 @@ def extract_exif(path: Path) -> ExifData | None:
 
     try:
         result = subprocess.run(
-            ["exiftool", "-json", "-n", "-G", str(path)],
+            [*_exiftool_cmd(), "-json", "-n", "-G", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
