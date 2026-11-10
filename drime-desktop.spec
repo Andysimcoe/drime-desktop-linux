@@ -71,7 +71,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/*.xml
 %{_metainfodir}/io.github.davethegamedev.DrimeDesktop.metainfo.xml
 
 %changelog
-* Tue Nov 10 2026 Andy - 0.6.0-1
+* Tue Nov 10 2026 DaveTheGameDev - 0.6.0-1
 - Photo metadata sync: new optional feature that pushes EXIF data (capture
   date, GPS location, camera settings) to Drime for files uploaded via the
   virtual drive or the sync folder. rclone uploads file content only, leaving
