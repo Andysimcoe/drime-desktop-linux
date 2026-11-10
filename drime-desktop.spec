@@ -71,7 +71,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/*.xml
 %{_metainfodir}/io.github.davethegamedev.DrimeDesktop.metainfo.xml
 
 %changelog
-* Tue Nov 10 2026 DaveTheGameDev - 0.6.0-1
+* Tue Nov 10 2026 Andysimcoe - 0.6.0-1
 - Photo metadata sync: new optional feature that pushes EXIF data (capture
   date, GPS location, camera settings) to Drime for files uploaded via the
   virtual drive or the sync folder. rclone uploads file content only, leaving
@@ -82,7 +82,8 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/*.xml
   folder are both searched for local copies to extract EXIF from
 - Settings toggle: enable/disable Photo metadata sync from the Settings dialog
   alongside the drive and sync folder toggles, with its own log expander and
-  Sync now button. Requires perl-Image-ExifTool (Recommends)
+  Sync now button. Requires perl-Image-ExifTool (Recommends); Flatpak users
+  need perl-Image-ExifTool installed on the host system
 - Updated for Fedora 45
 
 * Sun Sep 13 2026 DaveTheGameDev - 0.5.0-1
