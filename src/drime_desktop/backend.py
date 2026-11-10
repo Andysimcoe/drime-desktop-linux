@@ -49,7 +49,9 @@ SYSTEM_UNIT_DIR = Path("/usr/lib/systemd/user")
 MOUNT_UNIT = "rclone-drime-mount.service"
 SYNC_SERVICE = "drime-bisync.service"
 SYNC_TIMER = "drime-bisync.timer"
-UNITS = (MOUNT_UNIT, SYNC_SERVICE, SYNC_TIMER)
+METADATA_SERVICE = "drime-metadata-sync.service"
+METADATA_TIMER = "drime-metadata-sync.timer"
+UNITS = (MOUNT_UNIT, SYNC_SERVICE, SYNC_TIMER, METADATA_SERVICE, METADATA_TIMER)
 MIN_RCLONE = (1, 73, 0)
 WEB_URL = "https://app.drime.cloud"
 ICON_SYSTEM = Path("/usr/share/icons/hicolor/512x512/apps/drime-desktop.png")
@@ -637,6 +639,93 @@ def sync_log_tail(lines: int = 60) -> str:
                 "--no-pager", "-o", "short-iso"]).stdout
 
 
+# --- Metadata sync (EXIF for uploaded photos/videos) -------------------------
+
+def metadata_sync_problem() -> str | None:
+    """Check if metadata sync can be enabled. Returns problem string or None."""
+    if is_flatpak():
+        return "Metadata sync is not yet available in the Flatpak version"
+    if not shutil.which("exiftool"):
+        return f"exiftool is not installed ({install_hint('perl-Image-ExifTool')})"
+    return None
+
+
+def metadata_sync_enable(log: LogCb = _noop) -> None:
+    """Enable the metadata sync timer."""
+    if is_flatpak():
+        raise RuntimeError("Metadata sync is not yet available in the Flatpak version")
+    problem = metadata_sync_problem()
+    if problem:
+        raise RuntimeError(problem)
+    ensure_units(log)
+    cp = systemctl("enable", "--now", METADATA_TIMER)
+    if cp.returncode != 0:
+        raise RuntimeError(cp.stderr.strip() or "Could not enable the metadata sync timer")
+    log("Metadata sync enabled (runs every 15 minutes)")
+
+
+def metadata_sync_disable(log: LogCb = _noop) -> None:
+    """Disable the metadata sync timer."""
+    if is_flatpak():
+        return
+    systemctl("disable", "--now", METADATA_TIMER)
+    log("Metadata sync disabled")
+
+
+def metadata_sync_now() -> None:
+    """Trigger an immediate metadata sync run."""
+    if is_flatpak():
+        return
+    systemctl("start", "--no-block", METADATA_SERVICE)
+
+
+@dataclass
+class MetadataSyncStatus:
+    running: bool
+    last_result: str
+    last_start: int | None
+    last_end: int | None
+    next_run: int | None
+
+
+def metadata_sync_status() -> MetadataSyncStatus:
+    """Get the current status of the metadata sync service."""
+    if is_flatpak():
+        return MetadataSyncStatus(
+            running=False,
+            last_result="",
+            last_start=None,
+            last_end=None,
+            next_run=None,
+        )
+    out = systemctl("show", METADATA_SERVICE, "--timestamp=unix", "-p",
+                    "ActiveState,Result,ExecMainStartTimestamp,ExecMainExitTimestamp").stdout
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    next_run = None
+    lt = run(["systemctl", "--user", "list-timers", METADATA_TIMER, "--output=json", "--all"])
+    try:
+        for t in json.loads(lt.stdout or "[]"):
+            if t.get("unit") == METADATA_TIMER and t.get("next"):
+                next_run = int(t["next"]) // 1_000_000
+    except (ValueError, TypeError):
+        pass
+    return MetadataSyncStatus(
+        running=props.get("ActiveState") in ("active", "activating"),
+        last_result=props.get("Result", ""),
+        last_start=_unix(props.get("ExecMainStartTimestamp", "")),
+        last_end=_unix(props.get("ExecMainExitTimestamp", "")),
+        next_run=next_run,
+    )
+
+
+def metadata_sync_log_tail(lines: int = 60) -> str:
+    """Get recent log output from metadata sync."""
+    if is_flatpak():
+        return ""
+    return run(["journalctl", "--user", "-u", METADATA_SERVICE, "-n", str(lines),
+                "--no-pager", "-o", "short-iso"]).stdout
+
+
 # --- Aggregate state ---------------------------------------------------------
 
 @dataclass
@@ -648,10 +737,12 @@ class State:
     mounted: bool
     sync_enabled: bool
     sync_initialized: bool
+    metadata_sync_enabled: bool
     user_unit_copies: list[str]
     packaged_units: bool
     drive_problem: str | None = None    # Flatpak: why the drive cannot be enabled
     daemon_alive: bool | None = None    # Flatpak: the background service runs (None elsewhere)
+    metadata_sync_problem: str | None = None  # Why metadata sync cannot be enabled
 
     @property
     def configured(self) -> bool:
@@ -670,10 +761,12 @@ def state() -> State:
         mounted=is_mounted(),
         sync_enabled=is_enabled(SYNC_TIMER),
         sync_initialized=bisync_initialized(),
+        metadata_sync_enabled=is_enabled(METADATA_TIMER),
         user_unit_copies=user_unit_copies(),
         packaged_units=packaged_units_available(),
         drive_problem=drive_problem(),
         daemon_alive=daemon_alive(),
+        metadata_sync_problem=metadata_sync_problem(),
     )
 
 
@@ -743,8 +836,10 @@ def uninstall_all(purge_config: bool = False, log: LogCb = _noop) -> None:
             f.unlink(missing_ok=True)
         log("Drive unmounted, background service stopped")
     else:
+        systemctl("disable", "--now", METADATA_TIMER)
         systemctl("disable", "--now", SYNC_TIMER)
         systemctl("stop", SYNC_SERVICE)
+        systemctl("stop", METADATA_SERVICE)
         systemctl("disable", "--now", MOUNT_UNIT)
         unmount()
         for u in UNITS:
