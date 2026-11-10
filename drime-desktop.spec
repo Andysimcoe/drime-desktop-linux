@@ -2,7 +2,7 @@
 %{!?python3_sitelib: %global python3_sitelib %(python3 -c "import sysconfig as s; print(s.get_path('purelib', 'rpm_prefix' if 'rpm_prefix' in s.get_scheme_names() else None))")}
 
 Name:           drime-desktop
-Version:        0.5.0
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        Unofficial Drime cloud desktop app (virtual drive, sync folder, web app)
 License:        MIT
@@ -24,7 +24,7 @@ Requires:       fuse3
 Requires:       hicolor-icon-theme
 Recommends:     PackageKit-glib
 Recommends:     python3-rpm
-
+Recommends:     perl-Image-ExifTool
 %description
 Recreates the Drime desktop experience on Linux using the native Drime rclone
 backend: a virtual drive mounted at ~/Drime, a two-way synced ~/DrimeSync
@@ -45,6 +45,8 @@ install -D -m 0755 bin/drime-desktop %{buildroot}%{_bindir}/drime-desktop
 install -D -m 0644 systemd/rclone-drime-mount.service %{buildroot}%{_userunitdir}/rclone-drime-mount.service
 install -D -m 0644 systemd/drime-bisync.service       %{buildroot}%{_userunitdir}/drime-bisync.service
 install -D -m 0644 systemd/drime-bisync.timer         %{buildroot}%{_userunitdir}/drime-bisync.timer
+install -D -m 0644 systemd/drime-metadata-sync.service %{buildroot}%{_userunitdir}/drime-metadata-sync.service
+install -D -m 0644 systemd/drime-metadata-sync.timer  %{buildroot}%{_userunitdir}/drime-metadata-sync.timer
 install -D -m 0644 desktop/io.github.davethegamedev.DrimeDesktop.desktop %{buildroot}%{_datadir}/applications/io.github.davethegamedev.DrimeDesktop.desktop
 install -D -m 0644 assets/drime.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/drime-desktop.png
 install -D -m 0644 assets/io.github.davethegamedev.DrimeDesktop.metainfo.xml \
@@ -62,11 +64,27 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/*.xml
 %{_userunitdir}/rclone-drime-mount.service
 %{_userunitdir}/drime-bisync.service
 %{_userunitdir}/drime-bisync.timer
+%{_userunitdir}/drime-metadata-sync.service
+%{_userunitdir}/drime-metadata-sync.timer
 %{_datadir}/applications/io.github.davethegamedev.DrimeDesktop.desktop
 %{_datadir}/icons/hicolor/512x512/apps/drime-desktop.png
 %{_metainfodir}/io.github.davethegamedev.DrimeDesktop.metainfo.xml
 
 %changelog
+* Tue Nov 10 2026 Andy - 0.6.0-1
+- Photo metadata sync: new optional feature that pushes EXIF data (capture
+  date, GPS location, camera settings) to Drime for files uploaded via the
+  virtual drive or the sync folder. rclone uploads file content only, leaving
+  Drime without capture dates and location; this fixes that automatically
+- Tiered polling: metadata sync runs every 2 minutes, scanning only the last
+  10 minutes on each fast run (1-2 lightweight API calls). Falls back to a
+  full catch-up scan if the service was paused. The virtual drive and sync
+  folder are both searched for local copies to extract EXIF from
+- Settings toggle: enable/disable Photo metadata sync from the Settings dialog
+  alongside the drive and sync folder toggles, with its own log expander and
+  Sync now button. Requires perl-Image-ExifTool (Recommends)
+- Updated for Fedora 45
+
 * Sun Sep 13 2026 DaveTheGameDev - 0.5.0-1
 - New Flatpak bundle (drime-desktop-<version>.flatpak) for every other
   distribution, next to the RPM and the DEB. It bundles rclone 1.75.1 and runs

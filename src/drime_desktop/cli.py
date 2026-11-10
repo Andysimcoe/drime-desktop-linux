@@ -58,6 +58,10 @@ def cmd_status(_args) -> int:
     print(f"Sync folder:          enabled={st.sync_enabled} initialized={st.sync_initialized}")
     s = backend.sync_status()
     print(f"Last sync:            {s.last_result or 'never'} (ended {s.last_end or '-'}), next {s.next_run or '-'}")
+    print(f"Metadata sync:        enabled={st.metadata_sync_enabled}"
+          + (f" ({st.metadata_sync_problem})" if st.metadata_sync_problem else ""))
+    ms = backend.metadata_sync_status()
+    print(f"Last metadata sync:   {ms.last_result or 'never'} (ended {ms.last_end or '-'}), next {ms.next_run or '-'}")
     if backend.is_flatpak():
         print(f"Background service:   {'running' if st.daemon_alive else 'not running'} (Flatpak)")
     else:
@@ -84,6 +88,17 @@ def cmd_check_update(_args) -> int:
     return 0
 
 
+def cmd_metadata_sync(_args) -> int:
+    """Run the metadata sync process (called by systemd timer)."""
+    from .metadata import run_metadata_sync
+    try:
+        result = run_metadata_sync(_print)
+        return 0 if result.failed == 0 else 1
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="drime-desktop",
                                 description="Unofficial Drime cloud desktop integration. "
@@ -97,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--daemon", action="store_true",
                    help="run the background service (drive holder and sync scheduler; the Flatpak uses it "
                         "instead of the systemd units)")
+    g.add_argument("--metadata-sync", action="store_true",
+                   help="run the metadata sync process (pushes EXIF data for uploaded photos/videos)")
     p.add_argument("--token-from-stdin", action="store_true", help="(--install) read the API token from stdin")
     p.add_argument("--with-pydrime", action="store_true", help="(--install) also install the pydrime CLI")
     p.add_argument("--purge-config", action="store_true",
@@ -114,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.daemon:
         from .daemon import main as daemon_main
         return daemon_main()
+    if args.metadata_sync:
+        return cmd_metadata_sync(args)
     from .app import run_gui
     return run_gui()
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=Drime metadata sync (EXIF for uploaded photos/videos)
+After=network-online.target drime-bisync.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/drime-desktop --metadata-sync
+

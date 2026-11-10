@@ -119,6 +119,19 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.log_row.connect("notify::expanded", lambda *_: self._load_sync_log())
         g.add(self.log_row)
 
+        self.metadata_row = Adw.SwitchRow(title="Photo metadata sync",
+                                          subtitle="Sync EXIF data (dates, location) for uploaded photos/videos")
+        self.metadata_row.add_prefix(Gtk.Image.new_from_icon_name("image-x-generic-symbolic"))
+        self.metadata_row.add_suffix(button("Sync now", self.win.metadata_sync_now))
+        self.metadata_row.connect("notify::active", self._on_metadata_switch)
+        g.add(self.metadata_row)
+
+        self.metadata_log_row = Adw.ExpanderRow(title="Metadata sync log")
+        self.metadata_log = LogView()
+        self.metadata_log_row.add_row(self.metadata_log)
+        self.metadata_log_row.connect("notify::expanded", lambda *_: self._load_metadata_log())
+        g.add(self.metadata_log_row)
+
     def _build_updates(self):
         g = Adw.PreferencesGroup(title="Updates")
         self.page.add(g)
@@ -178,6 +191,23 @@ class SettingsDialog(Adw.PreferencesDialog):
                     f"last sync {relative_time(ss.last_end)} ({'ok' if ss.last_result == 'success' else 'failed'})"
                 sub = last + (f", next {relative_time(ss.next_run)}" if ss.next_run else "")
             self.sync_row.set_subtitle(f"{backend.SYNC_DIR} ↔ {backend.SYNC_REMOTE_PATH} — {sub}")
+
+            # Metadata sync row
+            if self.metadata_row.get_active() != st.metadata_sync_enabled:
+                self.metadata_row.set_active(st.metadata_sync_enabled)
+            self.metadata_row.set_sensitive(not st.metadata_sync_problem)
+            ms = backend.metadata_sync_status()
+            if ms.running:
+                msub = "syncing now…"
+            elif st.metadata_sync_problem:
+                msub = f"not available: {st.metadata_sync_problem}"
+            elif not st.metadata_sync_enabled:
+                msub = "off — enable to sync EXIF dates and GPS for uploaded photos"
+            else:
+                last = "never run" if not ms.last_end else \
+                    f"last run {relative_time(ms.last_end)} ({'ok' if ms.last_result == 'success' else 'failed'})"
+                msub = last + (f", next {relative_time(ms.next_run)}" if ms.next_run else "")
+            self.metadata_row.set_subtitle(msub)
         finally:
             self._refreshing = False
 
@@ -219,6 +249,21 @@ class SettingsDialog(Adw.PreferencesDialog):
     def _load_sync_log(self):
         if self.log_row.get_expanded():
             run_async(backend.sync_log_tail, lambda text, _e: self.sync_log.set_text(text or ""))
+
+    def _on_metadata_switch(self, row, _pspec):
+        if not self._user_toggled(row, self._known.metadata_sync_enabled if self._known else False):
+            return
+        self._known.metadata_sync_enabled = row.get_active()
+        fn = backend.metadata_sync_enable if row.get_active() else backend.metadata_sync_disable
+        def done(_r, err):
+            if err:
+                self.toast(f"Error: {err}")
+            self.win.refresh()
+        run_async(fn, done)
+
+    def _load_metadata_log(self):
+        if self.metadata_log_row.get_expanded():
+            run_async(backend.metadata_sync_log_tail, lambda text, _e: self.metadata_log.set_text(text or ""))
 
     def check_updates(self):
         self.update_check_btn.set_sensitive(False)
@@ -564,6 +609,17 @@ class MainWindow(Adw.ApplicationWindow):
         # Off the main thread: in the Flatpak this may have to (re)start the background service.
         run_async(backend.sync_now, lambda _r, err: self.toast(f"Error: {err}") if err else None)
         self.toast("Sync started")
+        
+        # Also trigger metadata sync if enabled
+        st = backend.state()
+        if st.metadata_sync_enabled:
+            run_async(backend.metadata_sync_now, lambda _r, err: None)  # silent, already toasted
+        
+        GLib.timeout_add_seconds(2, lambda: (self.refresh(), False)[1])
+
+    def metadata_sync_now(self):
+        run_async(backend.metadata_sync_now, lambda _r, err: self.toast(f"Error: {err}") if err else None)
+        self.toast("Metadata sync started")
         GLib.timeout_add_seconds(2, lambda: (self.refresh(), False)[1])
 
     def _downloaded(self, path: Path):

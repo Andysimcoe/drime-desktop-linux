@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Drime metadata sync every 2 minutes
+
+[Timer]
+# Run 2 minutes after boot
+OnBootSec=2min
+# Then every 2 minutes - fast scan only checks the last 10 minutes so this
+# is very lightweight (1-2 API calls when nothing has changed)
+OnUnitActiveSec=2min
+# Small jitter to avoid colliding with the bisync timer
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target

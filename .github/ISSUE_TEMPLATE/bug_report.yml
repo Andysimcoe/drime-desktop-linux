@@ -6,7 +6,7 @@ body:
     id: distro
     attributes:
       label: Distribution and version
-      placeholder: e.g. Fedora 44, Ubuntu 24.04
+      placeholder: e.g. Fedora 45, Ubuntu 24.04
     validations:
       required: true
   - type: input
